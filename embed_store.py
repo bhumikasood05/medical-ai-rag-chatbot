@@ -9,48 +9,88 @@ from sentence_transformers import SentenceTransformer
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # -----------------------
-# Load documents
+# Load documents with metadata
 # -----------------------
 documents_list = []
 
 data_path = "data"
 
 for filename in os.listdir(data_path):
+
     if filename.endswith(".txt"):
+
         file_path = os.path.join(data_path, filename)
+
         with open(file_path, "r", encoding="utf-8") as f:
-            documents_list.append(f.read())
+
+            text = f.read()
+
+            # Simple Chunking
+            chunk_size = 500
+            chunk_overlap = 100
+
+            for chunk_id, start in enumerate(
+                range(0, len(text), chunk_size)
+            ):
+
+                chunk = text[start:start + chunk_size]
+
+                documents_list.append(
+                    {
+                        "text": chunk,
+                        "source": filename,
+                        "chunk_id": chunk_id
+                    }
+                )
 
 # -----------------------
 # Create embeddings
 # -----------------------
-document_embeddings = model.encode(documents_list)
+texts = [doc["text"] for doc in documents_list]
+
+document_embeddings = model.encode(texts)
 document_embeddings = np.array(document_embeddings).astype("float32")
 
 # -----------------------
-# Create FAISS index
+# Cosine Similarity
 # -----------------------
-dimension = document_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
+faiss.normalize_L2(document_embeddings)
 
-# Add vectors to index
+dimension = document_embeddings.shape[1]
+
+index = faiss.IndexFlatIP(dimension)
+
 index.add(document_embeddings)
 
 print("✅ Embeddings created successfully!")
-print("📄 Total documents indexed:", index.ntotal)
+print("📄 Total chunks indexed:", index.ntotal)
 
 # -----------------------
-# SEARCH FUNCTION (RAG CORE)
+# SEARCH FUNCTION
 # -----------------------
-def search(query, k=2):
+def search(query, k=3, threshold=0.40):
+
     query_embedding = model.encode([query])
     query_embedding = np.array(query_embedding).astype("float32")
 
-    distances, indices = index.search(query_embedding, k)
+    faiss.normalize_L2(query_embedding)
+
+    scores, indices = index.search(query_embedding, k)
 
     results = []
-    for i in indices[0]:
-        results.append(documents_list[i])
+
+    for score, idx in zip(scores[0], indices[0]):
+
+        if score >= threshold:
+
+            results.append(
+                {
+                    "text": documents_list[idx]["text"],
+                    "source": documents_list[idx]["source"],
+                    "chunk_id": documents_list[idx]["chunk_id"],
+                    "score": float(score)
+                }
+            )
 
     return results
 
@@ -58,9 +98,17 @@ def search(query, k=2):
 # TEST RUN
 # -----------------------
 if __name__ == "__main__":
+
     query = "what is fever"
+
     results = search(query)
 
-    print("\n🔍 Top matching documents:\n")
+    print("\n🔍 Top Matching Chunks:\n")
+
     for r in results:
-        print("-", r)
+
+        print(f"📄 Source: {r['source']}")
+        print(f"🧩 Chunk: {r['chunk_id']}")
+        print(f"⭐ Score: {r['score']:.3f}")
+        print(r["text"][:200])
+        print("-" * 50)
